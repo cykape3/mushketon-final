@@ -26,7 +26,7 @@ CREATE TABLE competitions (
   id                 uuid    DEFAULT gen_random_uuid() PRIMARY KEY,
   date               date    NOT NULL DEFAULT CURRENT_DATE,
   is_active          boolean NOT NULL DEFAULT true,
-  type               text    NOT NULL DEFAULT 'pairs' CHECK (type IN ('pairs','final')),
+  type               text    NOT NULL DEFAULT 'pairs' CHECK (type IN ('pairs','firm','final')),
   timer_started_at   timestamptz,
   timer_duration     integer,
   timer_active       boolean NOT NULL DEFAULT false
@@ -36,6 +36,7 @@ CREATE TABLE competitions (
 -- ШАГ 3: Таблица участников + результаты серий
 -- Каждая строка = один стрелок
 -- type = 'pairs': пара = две строки с одинаковым target (номером щита), s1..s6
+-- type = 'firm':  пара = две строки с одинаковым target, 10 пар (щиты 1–20), s1,s2 (две серии по 5)
 -- type = 'final': 1 строка = 1 стрелок, position всегда 1, s1..s9
 -- (s1,s2 = серии по 5, s3..s9 = раунды по 2 выстрела)
 -- ============================================================
@@ -120,3 +121,13 @@ GRANT INSERT, UPDATE, DELETE ON shooters     TO anon;
 -- ============================================================
 ALTER PUBLICATION supabase_realtime ADD TABLE shooters;
 ALTER PUBLICATION supabase_realtime ADD TABLE competitions;
+
+-- ============================================================
+-- МИГРАЦИЯ для уже развёрнутой базы (тип 'firm' / «Фирменное»)
+-- Если таблица competitions уже создана без 'firm' в CHECK —
+-- выполнить один раз в SQL Editor:
+--
+--   ALTER TABLE competitions DROP CONSTRAINT IF EXISTS competitions_type_check;
+--   ALTER TABLE competitions ADD  CONSTRAINT competitions_type_check
+--     CHECK (type IN ('pairs','firm','final'));
+-- ============================================================

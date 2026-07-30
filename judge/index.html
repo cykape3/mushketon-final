@@ -299,6 +299,7 @@
     <h2>Участники соревнования</h2>
     <div id="type-tabs">
       <button class="type-tab" id="tab-pairs" data-type="pairs">Пары</button>
+      <button class="type-tab" id="tab-firm" data-type="firm">Фирменное</button>
       <button class="type-tab active" id="tab-final" data-type="final">Индивидуальный финал</button>
     </div>
     <table id="setup-table">
@@ -448,18 +449,21 @@ async function loadShooters() {
   subscribeCompetitionUpdates();
 }
 
+// Парные типы: группировка по щитам-парам, заголовок «Пара», разделители
+function isPairBasedType(type) { return type === 'pairs' || type === 'firm'; }
+
 function updateRankingHeader() {
   const th = document.getElementById('th-ranking-name');
-  if (th) th.textContent = competition?.type === 'final' ? 'Имя' : 'Пара';
+  if (th) th.textContent = isPairBasedType(competition?.type) ? 'Пара' : 'Имя';
 }
 
 // Заголовки серий: количество выстрелов в каждой серии/раунде
 // зависит от типа соревнования — вычитывается каждый раз
 
 function seriesLabels() {
-  return competition?.type === 'final'
-    ? ['5','5','2','2','2','2','2','2','2']
-    : ['5','5','5','3','3','3'];
+  if (competition?.type === 'final') return ['5','5','2','2','2','2','2','2','2'];
+  if (competition?.type === 'firm') return ['5','5'];
+  return ['5','5','5','3','3','3'];
 }
 function seriesCount() { return seriesLabels().length; }
 
@@ -467,7 +471,7 @@ function seriesCount() { return seriesLabels().length; }
 // Пары: щит 1+2, щит 3+4, щит 5+6 ... до щит 19+20
 // Финал: 1 стрелок = 1 строка, без группировки/разделителей
 function renderScoring() {
-  const isFinal = competition?.type === 'final';
+  const isPairBased = isPairBasedType(competition?.type);
   const labels  = seriesLabels();
   const count   = seriesCount();
 
@@ -484,7 +488,7 @@ function renderScoring() {
 
   sorted.forEach((shooter, idx) => {
     // Разделитель перед нечётным щитом (кроме первого) — только для пар
-    if (!isFinal && idx > 0 && shooter.target % 2 === 1) {
+    if (isPairBased && idx > 0 && shooter.target % 2 === 1) {
       const sep = tbody.insertRow();
       sep.className = 'pair-sep';
       sep.insertCell().colSpan = 2 + count + 1;
@@ -585,7 +589,7 @@ async function saveCell(id, key, value) {
 function buildRanking() {
   const count = seriesCount();
 
-  if (competition?.type === 'final') {
+  if (!isPairBasedType(competition?.type)) {
     return shooters
       .map(s => ({
         names: s.name,
@@ -819,21 +823,24 @@ function openSetupModal() {
 
 function syncTypeTabs() {
   document.getElementById('tab-pairs').classList.toggle('active', selectedType === 'pairs');
+  document.getElementById('tab-firm').classList.toggle('active', selectedType === 'firm');
   document.getElementById('tab-final').classList.toggle('active', selectedType === 'final');
 }
 
 function renderSetupRows() {
   const tbody = document.getElementById('setup-body');
   tbody.innerHTML = '';
-  for (let i = 0; i < 8; i++) addSetupRow(i);
+  // firm: 10 пар = 20 щитов; pairs/final: 8 строк
+  const rows = selectedType === 'firm' ? 20 : 8;
+  for (let i = 0; i < rows; i++) addSetupRow(i);
 }
 
 function addSetupRow(idx) {
   const tbody     = document.getElementById('setup-body');
   const targetNum = idx + 1;
 
-  // Разделитель между парами — только для типа «pairs»
-  if (selectedType === 'pairs' && idx > 0 && idx % 2 === 0) {
+  // Разделитель между парами — только для парных типов
+  if (isPairBasedType(selectedType) && idx > 0 && idx % 2 === 0) {
     const sep = tbody.insertRow();
     sep.className = 'sep';
     sep.insertCell().colSpan = 2;
@@ -865,6 +872,11 @@ function addSetupRow(idx) {
 
 document.getElementById('tab-pairs').addEventListener('click', () => {
   selectedType = 'pairs';
+  syncTypeTabs();
+  renderSetupRows();
+});
+document.getElementById('tab-firm').addEventListener('click', () => {
+  selectedType = 'firm';
   syncTypeTabs();
   renderSetupRows();
 });
