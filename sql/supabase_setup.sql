@@ -29,7 +29,8 @@ CREATE TABLE competitions (
   type               text    NOT NULL DEFAULT 'pairs' CHECK (type IN ('pairs','firm','final')),
   timer_started_at   timestamptz,
   timer_duration     integer,
-  timer_active       boolean NOT NULL DEFAULT false
+  timer_active       boolean NOT NULL DEFAULT false,
+  created_at         timestamptz NOT NULL DEFAULT now()
 );
 
 -- ============================================================

@@ -83,7 +83,7 @@ scoreboard/index.html (GitHub Pages)
 | `id` | uuid | PK |
 | `date` | date | дата (проставляется автоматически) |
 | `is_active` | boolean | активное соревнование |
-| `type` | text | `'pairs'`, `'firm'` или `'final'` (по умолчанию `'pairs'`) |
+| `created_at` | timestamptz | момент создания (сортировка списка и детерминированный выбор активного) |
 
 ### Таблица `shooters`
 

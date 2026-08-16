@@ -168,6 +168,7 @@
     let currentCompId = null;
     let currentCompType = 'pairs';
     let shootersChannel = null;
+    let compChannel = null;   // канал competitions (Realtime)
     let reconnectTimer = null;
 
     function isPairBasedType(type) { return type === 'pairs' || type === 'firm'; }
@@ -185,6 +186,29 @@
       }
       return any ? Math.round(sum * 10) / 10 : null;
     }
+
+    // Получить единственную активную сессию (с поллингом при нескольких активных)
+    async function getActiveComp() {
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const { data: comps } = await db
+          .from('competitions')
+          .select('*')
+          .eq('is_active', true)
+          .order('created_at', { ascending: false });
+        if (!comps) return null;
+        if (comps.length === 0) return null;
+        if (comps.length === 1) return comps[0];
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      const { data: comps } = await db
+        .from('competitions')
+        .select('*')
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      return comps?.[0] ?? null;
+    }
+
 
     // ── Подсчёт рейтинга ────────────────────────────────────────
     // Пары (тип 'pairs'): щит 1+2, щит 3+4, щит 5+6 и т.д. (до 10 пар = 20 щитов)
@@ -250,15 +274,8 @@
 
     // ── Загрузка данных ───────────────────────────────────────
     async function load() {
-      const { data: comps } = await db
-        .from('competitions')
-        .select('*')
-        .eq('is_active', true)
-        .order('date', { ascending: false })
-        .limit(1);
-
-      if (!comps?.length) return;
-      const comp = comps[0];
+      const comp = await getActiveComp();
+      if (!comp) return;
       currentCompId   = comp.id;
       currentCompType = comp.type || 'pairs';
 
@@ -270,7 +287,7 @@
           { day: 'numeric', month: 'long', year: 'numeric' });
 
       await refreshShooters();
-      applyTimerState(comp);  // показать таймер сразу при загрузке
+      applyTimerState(comp);
       subscribe(comp.id);
     }
 
@@ -291,8 +308,8 @@
     function subscribe(compId) {
       const dot = document.getElementById('dot');
 
-      // Пересоздаём канал при повторном вызове
       if (shootersChannel) { db.removeChannel(shootersChannel); shootersChannel = null; }
+      if (compChannel) { db.removeChannel(compChannel); compChannel = null; }
 
       shootersChannel = db.channel('scoreboard-' + Date.now())
         .on('postgres_changes', {
@@ -316,8 +333,6 @@
             dot.textContent = '● live';
             dot.className   = 'live';
             if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-            // После (пере)подключения подтягиваем актуальные данные —
-            // на случай изменений, пропущенных во время обрыва
             refreshShooters();
           } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
             dot.textContent = '● connecting';
@@ -329,19 +344,25 @@
           }
         });
 
-      // Новое соревнование (INSERT) — перезагрузить страницу.
-      // Изменение соревнования (UPDATE) — обновить таймер.
-      db.channel('sb-competitions')
+      // Подписка на UPDATE competitions без фильтра по id
+      compChannel = db.channel('sb-competitions-' + Date.now())
         .on('postgres_changes', {
           event: 'INSERT', schema: 'public', table: 'competitions'
         }, () => location.reload())
         .on('postgres_changes', {
           event: 'UPDATE',
           schema: 'public',
-          table: 'competitions',
-          filter: `id=eq.${compId}`
+          table: 'competitions'
         }, ({ new: updated }) => {
-          applyTimerState(updated);
+          if (updated.id === compId) {
+            if (updated.is_active) {
+              applyTimerState(updated);
+            } else {
+              location.reload();
+            }
+          } else if (updated.is_active) {
+            location.reload();
+          }
         })
         .subscribe();
     }
@@ -353,6 +374,11 @@
       stopSbTimerTick();
       const block = document.getElementById('sb-timer');
       if (!comp.timer_active || !comp.timer_started_at || !comp.timer_duration) {
+        block.style.display = 'none';
+        return;
+      }
+      const remaining = comp.timer_duration - (Date.now() - new Date(comp.timer_started_at)) / 1000;
+      if (remaining <= 0) {
         block.style.display = 'none';
         return;
       }

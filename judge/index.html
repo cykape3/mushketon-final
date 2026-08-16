@@ -22,6 +22,7 @@
       align-items: center;
       justify-content: space-between;
       gap: 16px;
+      flex-wrap: wrap;
     }
     header h1 { font-size: 1.1rem; letter-spacing: 2px; }
     header .meta { font-size: 0.8rem; color: #666; flex: 1; }
@@ -288,8 +289,22 @@
 <header>
   <h1>MUSKETOON · СУДЬЯ</h1>
   <div class="meta" id="comp-info"></div>
-  <button class="btn-primary" id="btn-new" style="display:none">+ Новое соревнование</button>
+  <div style="display:flex;gap:8px;flex-wrap:wrap" id="header-btns" style="display:none">
+    <button class="btn-ghost" id="btn-sessions" style="display:none">Соревнования</button>
+    <button class="btn-primary" id="btn-new" style="display:none">+ Новое соревнование</button>
+  </div>
 </header>
+
+<!-- Модал: список соревнований -->
+<div id="sessions-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:200; align-items:flex-start; justify-content:center; padding-top:40px;">
+  <div id="sessions-modal" style="background:#fff; border-radius:12px; padding:28px; width:420px; max-width:95vw; max-height:85vh; overflow-y:auto;">
+    <h2 style="margin-bottom:16px; font-size:1.05rem;">Соревнования</h2>
+    <div id="sessions-body"></div>
+    <div style="display:flex; justify-content:flex-end; margin-top:16px;">
+      <button class="btn-ghost" id="btn-close-sessions">Закрыть</button>
+    </div>
+  </div>
+</div>
 
 
 
@@ -387,6 +402,8 @@ const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 
 let competition = null;
 let shooters    = [];
+let competitionChannel = null; // ссылка на канал для снятия при восстановлении
+const pendingSaves = new Set(); // промисы незавершённых saveCell
 
 // ── Инициализация ─────────────────────────────────────────
 async function init() {
@@ -398,7 +415,7 @@ async function init() {
     .from('competitions')
     .select('*')
     .eq('is_active', true)
-    .order('date', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(1);
 
   loading.style.display = 'none';
@@ -410,6 +427,7 @@ async function init() {
   }
 
   document.getElementById('btn-new').style.display = 'block';
+  document.getElementById('btn-sessions').style.display = 'block';
 
   if (!comps || comps.length === 0) {
     document.getElementById('no-competition').style.display = 'block';
@@ -567,7 +585,14 @@ async function saveCell(id, key, value) {
   showStatus('Сохранение...', 'saving');
   // .select() возвращает реально обновлённые строки. Без валидного
   // токена RLS отсекает строку — вернётся пустой массив без error.
-  const { data, error } = await db.from('shooters').update({ [key]: value }).eq('id', id).select();
+  const p = db.from('shooters').update({ [key]: value }).eq('id', id).select();
+  pendingSaves.add(p);
+  let data, error;
+  try {
+    ({ data, error } = await p);
+  } finally {
+    pendingSaves.delete(p);
+  }
   if (error) { showStatus('Ошибка: ' + error.message, 'error'); return; }
   if (!data || data.length === 0) {
     showStatus('Не сохранено — нет прав (проверьте ссылку с токеном)', 'error');
@@ -644,6 +669,13 @@ function loadTimerState() {
 function applyTimerState(comp) {
   stopTimerTick(); // остановить старый tick перед перезапуском
   if (comp.timer_active && comp.timer_started_at && comp.timer_duration) {
+    const remaining = comp.timer_duration - (Date.now() - new Date(comp.timer_started_at)) / 1000;
+    if (remaining <= 0) {
+      // Таймер истёк — не показывать 00:00 красным
+      renderTimerDisplay(null, null, false);
+      syncTimerButtons({ timer_active: false });
+      return;
+    }
     startTimerTick(new Date(comp.timer_started_at), comp.timer_duration);
   } else {
     renderTimerDisplay(null, null, false);
@@ -733,7 +765,8 @@ function syncTimerButtons(comp) {
 // Подписка на UPDATE competitions (синхронизация между вкладками)
 function subscribeCompetitionUpdates() {
   if (!competition) return;
-  db.channel('judge-comp-' + competition.id)
+  if (competitionChannel) { db.removeChannel(competitionChannel); competitionChannel = null; }
+  competitionChannel = db.channel('judge-comp-' + competition.id)
     .on('postgres_changes', {
       event: 'UPDATE',
       schema: 'public',
@@ -930,9 +963,186 @@ document.getElementById('btn-start').addEventListener('click', async () => {
   await loadShooters();
 });
 
+document.getElementById('btn-sessions').addEventListener('click', openSessionsModal);
+document.getElementById('btn-close-sessions').addEventListener('click', closeSessionsModal);
+
+let sessionsRequestId = 0; // для игнорирования запоздавшего ответа
+
+function openSessionsModal() {
+  const overlay = document.getElementById('sessions-overlay');
+  overlay.style.display = 'flex';
+  listSessions();
+}
+
+function closeSessionsModal() {
+  document.getElementById('sessions-overlay').style.display = 'none';
+  sessionsRequestId++; // сбросить запрос
+}
+
+async function listSessions() {
+  const body = document.getElementById('sessions-body');
+  const myReqId = ++sessionsRequestId;
+  body.innerHTML = '<div style="color:#aaa; padding:12px 0;">\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430\u2026</div>';
+
+  const { data: comps, error: ce } = await db
+    .from('competitions')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(10);
+
+  if (myReqId !== sessionsRequestId) return; // модал закрыт пока шёл запрос
+
+  if (ce) {
+    body.innerHTML = '<div style="color:#c0392b; padding:12px 0;">\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0441\u043f\u0438\u0441\u043e\u043a</div>';
+    showStatus('\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438 \u0441\u043e\u0440\u0435\u0432\u043d\u043e\u0432\u0430\u043d\u0438\u0439: ' + ce.message, 'error');
+    return;
+  }
+
+  if (!comps || comps.length === 0) {
+    body.innerHTML = '<div style="color:#aaa; padding:12px 0;">\u0421\u043e\u0440\u0435\u0432\u043d\u043e\u0432\u0430\u043d\u0438\u0439 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442</div>';
+    return;
+  }
+
+  // З\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0441\u0442\u0440\u0435\u043b\u043a\u043e\u0432 \u0434\u043b\u044f \u043f\u0440\u0435\u0432\u044c\u044e (\u043f\u0435\u0440\u0432\u044b\u0435 3 \u043f\u043e lane/id)
+  const ids = comps.map(c => c.id);
+  const { data: allShooters } = await db
+    .from('shooters')
+    .select('competition_id, name, target, id')
+    .in('competition_id', ids)
+    .order('target', { ascending: true });
+
+  if (myReqId !== sessionsRequestId) return;
+
+  const shootersByComp = {};
+  for (const s of (allShooters || [])) {
+    if (!shootersByComp[s.competition_id]) shootersByComp[s.competition_id] = [];
+    shootersByComp[s.competition_id].push(s);
+  }
+
+  const typeLabels = { pairs: '\u041f\u0430\u0440\u044b', firm: '\u0424\u0438\u0440\u043c\u0435\u043d\u043d\u043e\u0435', final: '\u0424\u0438\u043d\u0430\u043b' };
+
+  body.innerHTML = comps.map(comp => {
+    const isCurrent = competition && comp.id === competition.id;
+    const dt = new Date(comp.created_at).toLocaleString('ru-RU', {
+      day: 'numeric', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit'
+    });
+    const typeLabel = typeLabels[comp.type] || comp.type;
+    const label = dt + ' \u00b7 ' + typeLabel + (isCurrent ? ' \u00b7 <strong>\u0442\u0435\u043a\u0443\u0449\u0435\u0435</strong>' : '');
+
+    const shooterList = shootersByComp[comp.id] || [];
+    // \u0421\u043e\u0440\u0442 \u043f\u043e target asc, \u0437\u0430\u0442\u0435\u043c \u043f\u043e id \u043f\u0440\u0438 \u0440\u0430\u0432\u0435\u043d\u0441\u0442\u0432\u0435
+    shooterList.sort((a, b) => (a.target ?? 0) - (b.target ?? 0) || a.id.localeCompare(b.id));
+    let preview = '';
+    if (shooterList.length > 0) {
+      const first3 = shooterList.slice(0, 3).map(s => esc(s.name)).join(', ');
+      preview = first3 + (shooterList.length > 3 ? '\u2026' : '');
+    }
+
+    const restoreBtn = isCurrent
+      ? ''
+      : `<button class="btn-ghost" style="font-size:0.8rem; padding:5px 12px; white-space:nowrap" data-restore-id="${comp.id}">\u0412\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c</button>`;
+
+    return `
+      <div style="padding:12px 0; border-top:1px solid #f0f0f0; display:flex; gap:10px; align-items:flex-start; justify-content:space-between;">
+        <div>
+          <div style="font-size:0.88rem; font-weight:${isCurrent ? '700' : '400'}">${label}</div>
+          ${preview ? `<div style="font-size:0.8rem; color:#888; margin-top:3px">${preview}</div>` : ''}
+        </div>
+        ${restoreBtn}
+      </div>`;
+  }).join('');
+
+  // \u041f\u0440\u0438\u0432\u044f\u0437\u0430\u0442\u044c \u043a\u043b\u0438\u043a\u0438 \u043d\u0430 \u043a\u043d\u043e\u043f\u043a\u0438 \u0412\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c
+  body.querySelectorAll('[data-restore-id]').forEach(btn => {
+    btn.addEventListener('click', () => restoreSession(btn.dataset.restoreId));
+  });
+}
+
+async function restoreSession(id) {
+  // \u0414\u0438\u0437\u0435\u0439\u0431\u043b \u0432\u0441\u0435 \u043a\u043d\u043e\u043f\u043a\u0438 \u0412\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c
+  const body = document.getElementById('sessions-body');
+  body.querySelectorAll('[data-restore-id]').forEach(b => b.disabled = true);
+
+  // 1. \u041e\u0436\u0438\u0434\u0430\u0435\u043c \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0438\u044f \u043f\u0435\u043d\u0434\u044f\u0449\u0438\u0445 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u0439
+  const results = await Promise.allSettled([...pendingSaves]);
+  const hasFailed = results.some(r => r.status === 'rejected' ||
+    (r.status === 'fulfilled' && r.value?.error) ||
+    (r.status === 'fulfilled' && r.value?.data?.length === 0));
+  if (hasFailed) {
+    body.querySelectorAll('[data-restore-id]').forEach(b => b.disabled = false);
+    showStatus('\u041d\u0435 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0430 \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u044f\u044f \u044f\u0447\u0435\u0439\u043a\u0430, \u043f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435 \u0432\u0432\u043e\u0434', 'error');
+    return;
+  }
+
+  // 2. \u0410\u043a\u0442\u0438\u0432\u0438\u0440\u0443\u0435\u043c \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u0443\u044e (\u0441\u043d\u0430\u0447\u0430\u043b\u0430 — \u0447\u0442\u043e\u0431\u044b \u043d\u0435 \u043e\u0441\u0442\u0430\u0442\u044c\u0441\u044f \u0431\u0435\u0437 \u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0439 \u043f\u0440\u0438 \u0441\u0431\u043e\u0435)
+  const { data: actData, error: actErr } = await db
+    .from('competitions')
+    .update({ is_active: true })
+    .eq('id', id)
+    .select();
+
+  if (actErr || !actData || actData.length === 0) {
+    body.querySelectorAll('[data-restore-id]').forEach(b => b.disabled = false);
+    showStatus('\u041d\u0435\u0442 \u043f\u0440\u0430\u0432 \u0438\u043b\u0438 \u0441\u043e\u0440\u0435\u0432\u043d\u043e\u0432\u0430\u043d\u0438\u0435 \u0443\u0434\u0430\u043b\u0435\u043d\u043e', 'error');
+    return;
+  }
+
+  // 3. \u0414\u0435\u0430\u043a\u0442\u0438\u0432\u0438\u0440\u0443\u0435\u043c \u043e\u0441\u0442\u0430\u043b\u044c\u043d\u044b\u0435
+  const { error: deactErr } = await db
+    .from('competitions')
+    .update({ is_active: false })
+    .eq('is_active', true)
+    .neq('id', id)
+    .select();
+
+  if (deactErr) {
+    // \u0412\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u043e, \u043d\u043e \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u044f \u0434\u0435\u0430\u043a\u0442\u0438\u0432\u0430\u0446\u0438\u0438 \u0441\u0431\u043e\u0438\u043b\u0430\u0441\u044c
+    showStatus('\u0412\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u043e, \u043d\u043e \u0441\u0442\u0430\u0440\u0430\u044f \u0441\u0435\u0441\u0441\u0438\u044f \u043e\u0441\u0442\u0430\u043b\u0430\u0441\u044c \u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0439 \u2014 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\u0412\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c\u00bb \u0435\u0449\u0451 \u0440\u0430\u0437', 'error');
+    body.querySelectorAll('[data-restore-id]').forEach(b => b.disabled = false);
+    return;
+  }
+
+  // 4. \u041a\u043e\u043d\u0442\u0440\u043e\u043b\u044c\u043d\u043e\u0435 \u0447\u0442\u0435\u043d\u0438\u0435
+  async function checkActive() {
+    const { data: check } = await db
+      .from('competitions')
+      .select('is_active')
+      .eq('id', id)
+      .single();
+    return check?.is_active;
+  }
+
+  let isActive = await checkActive();
+  if (!isActive) {
+    // \u041e\u0434\u043d\u0430 \u043f\u043e\u0432\u0442\u043e\u0440\u043d\u0430\u044f \u0430\u043a\u0442\u0438\u0432\u0430\u0446\u0438\u044f
+    await db.from('competitions').update({ is_active: true }).eq('id', id);
+    isActive = await checkActive();
+    if (!isActive) {
+      showStatus('\u0414\u0440\u0443\u0433\u043e\u0439 \u0441\u0443\u0434\u044c\u044f \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0438\u043b \u0441\u043e\u0440\u0435\u0432\u043d\u043e\u0432\u0430\u043d\u0438\u0435, \u043e\u0431\u043d\u043e\u0432\u0438\u0442\u0435 \u0441\u043f\u0438\u0441\u043e\u043a', 'error');
+      body.querySelectorAll('[data-restore-id]').forEach(b => b.disabled = false);
+      return;
+    }
+  }
+
+  // 5. \u041f\u0435\u0440\u0435\u0440\u0438\u0441\u043e\u0432\u043a\u0430
+  closeSessionsModal();
+  const { data: restoredComp } = await db
+    .from('competitions')
+    .select('*')
+    .eq('id', id)
+    .single();
+  competition = restoredComp;
+  await loadShooters();
+  showStatus('\u0421\u043e\u0440\u0435\u0432\u043d\u043e\u0432\u0430\u043d\u0438\u0435 \u0432\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u043e \u2713', 'ok');
+  setTimeout(() => showStatus('', ''), 2000);
+}
+
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape')
+  if (e.key === 'Escape') {
     document.getElementById('modal-overlay').classList.remove('visible');
+    closeSessionsModal();
+  }
 });
 
 function esc(str) {
