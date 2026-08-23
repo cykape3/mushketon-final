@@ -1,0 +1,11 @@
+// ============================================================
+// Mushketon Live Scoring — шаблон конфига
+// Скопируй этот файл в config.js (в корне репозитория) и впиши
+// ключи СВОЕГО проекта Supabase (Project Settings → API).
+// Меняешь ключи здесь ОДИН раз — работает на обеих страницах
+// (judge/ и scoreboard/). Параметры соревнования жёстко зашиты в коде.
+// ============================================================
+window.MUSHKETON_CONFIG = {
+  SUPABASE_URL: 'YOUR_SUPABASE_PROJECT_URL',
+  SUPABASE_ANON_KEY: 'YOUR_SUPABASE_ANON_KEY'
+};

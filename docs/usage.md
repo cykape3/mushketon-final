@@ -158,9 +158,9 @@ RETURNS text LANGUAGE sql SECURITY DEFINER STABLE AS $$
 $$;
 ```
 
-Отправить судье новую ссылку:
+Отправить судье новую ссылку (замените `ВАШ_ЛОГИН` на свой GitHub-логин — см. [setup.md](setup.md)):
 ```
-https://sst1xx.github.io/mushketon-final/judge/?token=НОВЫЙ_ТОКЕН
+https://ВАШ_ЛОГИН.github.io/mushketon-final/judge/?token=НОВЫЙ_ТОКЕН
 ```
 
 Код репозитория при этом **не меняется**.

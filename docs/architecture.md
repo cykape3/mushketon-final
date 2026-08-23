@@ -46,8 +46,14 @@ scoreboard/index.html (GitHub Pages)
 
 ```
 Все (анонимы)        → только SELECT
-Запрос с токеном     → SELECT + INSERT + UPDATE + DELETE
+Запрос с токеном     → competitions: SELECT + INSERT + UPDATE
+                       shooters:     SELECT + INSERT + UPDATE + DELETE
 ```
+
+> DELETE на `competitions` анонимной ролью не выдан вообще (нет GRANT DELETE) —
+> удаление соревнований выполняется напрямую в Supabase SQL Editor под
+> сервис-ролью (`sql/cleanup-keep-last-10.sql`, `sql/delete-one-competition.sql`),
+> а не через фронтенд с judge-токеном.
 
 ## Типы соревнований
 
@@ -83,6 +89,10 @@ scoreboard/index.html (GitHub Pages)
 | `id` | uuid | PK |
 | `date` | date | дата (проставляется автоматически) |
 | `is_active` | boolean | активное соревнование |
+| `type` | text | тип соревнования: `pairs` / `firm` / `final` (по умолчанию `pairs`) |
+| `timer_started_at` | timestamptz | момент запуска таймера (`null`, если не запущен) |
+| `timer_duration` | integer | длительность таймера в секундах (250 или 50) |
+| `timer_active` | boolean | таймер сейчас идёт |
 | `created_at` | timestamptz | момент создания (сортировка списка и детерминированный выбор активного) |
 
 ### Таблица `shooters`
